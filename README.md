@@ -29,7 +29,7 @@ On first launch, the user selects an extracted game and a separate data folder. 
 4. Complete setup with the wizard.
 5. Play the game.
 
-macOS may require approval in Privacy & Security for an app downloaded from the internet. See [Apple's instructions](https://support.apple.com/102445). Do not disable Gatekeeper globally; it is not safe.
+macOS may require approval in Privacy & Security for an app downloaded from the internet. See [Apple's instructions](https://support.apple.com/102445). Do not disable Gatekeeper globally, it is not safe for you.
 
 ## Features
 
