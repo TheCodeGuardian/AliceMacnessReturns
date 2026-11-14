@@ -1,0 +1,263 @@
+diff --git a/sdk/include/rex/ui/surface_mac.h b/sdk/include/rex/ui/surface_mac.h
+index c269cbf..1c6a919 100644
+--- a/sdk/include/rex/ui/surface_mac.h
++++ b/sdk/include/rex/ui/surface_mac.h
+@@ -28,6 +28,7 @@ class CAMetalLayerSurface final : public Surface {
+ 
+   TypeIndex GetType() const override { return kTypeIndex_CAMetalLayer; }
+   const void* layer() const { return layer_; }
++  void SynchronizeDrawableSize(uint32_t width, uint32_t height, bool repair);
+ 
+  protected:
+   bool GetSizeImpl(uint32_t& width_out, uint32_t& height_out) const override;
+diff --git a/sdk/include/rex/ui/vulkan/functions/device_1_0.inc b/sdk/include/rex/ui/vulkan/functions/device_1_0.inc
+index aa55a4a..64a8957 100644
+--- a/sdk/include/rex/ui/vulkan/functions/device_1_0.inc
++++ b/sdk/include/rex/ui/vulkan/functions/device_1_0.inc
+@@ -15,6 +15,7 @@ XE_UI_VULKAN_FUNCTION(vkCmdClearColorImage)
+ XE_UI_VULKAN_FUNCTION(vkCmdCopyBuffer)
+ XE_UI_VULKAN_FUNCTION(vkCmdCopyBufferToImage)
+ XE_UI_VULKAN_FUNCTION(vkCmdCopyImageToBuffer)
++XE_UI_VULKAN_FUNCTION(vkCmdResolveImage)
+ XE_UI_VULKAN_FUNCTION(vkCmdCopyQueryPoolResults)
+ XE_UI_VULKAN_FUNCTION(vkCmdDispatch)
+ XE_UI_VULKAN_FUNCTION(vkCmdDraw)
+@@ -79,6 +80,7 @@ XE_UI_VULKAN_FUNCTION(vkResetDescriptorPool)
+ XE_UI_VULKAN_FUNCTION(vkResetFences)
+ XE_UI_VULKAN_FUNCTION(vkQueueBindSparse)
+ XE_UI_VULKAN_FUNCTION(vkQueueSubmit)
++XE_UI_VULKAN_FUNCTION(vkQueueWaitIdle)
+ XE_UI_VULKAN_FUNCTION(vkUnmapMemory)
+ XE_UI_VULKAN_FUNCTION(vkUpdateDescriptorSets)
+ XE_UI_VULKAN_FUNCTION(vkWaitForFences)
+diff --git a/sdk/include/rex/ui/vulkan/presenter.h b/sdk/include/rex/ui/vulkan/presenter.h
+index 098683f..52ccb8a 100644
+--- a/sdk/include/rex/ui/vulkan/presenter.h
++++ b/sdk/include/rex/ui/vulkan/presenter.h
+@@ -418,6 +418,7 @@ class VulkanPresenter final : public Presenter {
+     uint32_t early_image = UINT32_MAX;
+     VkSemaphore early_semaphore = VK_NULL_HANDLE;
+     bool early_valid = false;
++    uint64_t swapchain_presented_frames = 0;
+     uint64_t early_hits = 0;
+     uint64_t early_failures = 0;
+ 
+diff --git a/sdk/src/ui/CMakeLists.txt b/sdk/src/ui/CMakeLists.txt
+index af5de00..46cb8d3 100644
+--- a/sdk/src/ui/CMakeLists.txt
++++ b/sdk/src/ui/CMakeLists.txt
+@@ -82,6 +82,7 @@ elseif(WIN32)
+         surface_win.cpp
+     )
+ elseif(APPLE)
++    set_source_files_properties(surface_mac.cpp PROPERTIES LANGUAGE OBJCXX)
+     set(REXUI_PLATFORM_SOURCES
+         surface_mac.cpp
+     )
+@@ -130,6 +131,9 @@ if(NOT REXGLUE_PLATFORM_SWITCH)
+     target_link_libraries(rexui PUBLIC SDL3::SDL3)
+ endif()
+ target_link_libraries(rexui PRIVATE utf8cpp)
++if(APPLE)
++    target_link_libraries(rexui PUBLIC "-framework QuartzCore")
++endif()
+ 
+ if(REXGLUE_FIDELITYFX_SOURCE_DIR AND EXISTS "${REXGLUE_FIDELITYFX_SOURCE_DIR}/sdk/include")
+     target_include_directories(rexui PRIVATE
+diff --git a/sdk/src/ui/surface_mac.cpp b/sdk/src/ui/surface_mac.cpp
+index ef56dc9..cc344c8 100644
+--- a/sdk/src/ui/surface_mac.cpp
++++ b/sdk/src/ui/surface_mac.cpp
+@@ -10,6 +10,9 @@
+  */
+ 
+ #include <rex/ui/surface_mac.h>
++#include <rex/logging.h>
++#import <QuartzCore/CAMetalLayer.h>
++#import <QuartzCore/CATransaction.h>
+ 
+ #include <SDL3/SDL_metal.h>
+ #include <SDL3/SDL_video.h>
+@@ -17,6 +20,22 @@
+ namespace rex {
+ namespace ui {
+ 
++void CAMetalLayerSurface::SynchronizeDrawableSize(uint32_t width, uint32_t height, bool repair) {
++  CAMetalLayer* layer = (__bridge CAMetalLayer*)layer_;
++  CGSize actual = layer.drawableSize;
++  if (actual.width == width && actual.height == height) return;
++  REXLOG_WARN("[metal] drawable {}x{} disagrees with new swapchain {}x{}; repair {}",
++              actual.width, actual.height, width, height, repair);
++  if (repair) {
++    [CATransaction begin];
++    [CATransaction setDisableActions:YES];
++    layer.drawableSize = CGSizeMake(width, height);
++    [CATransaction commit];
++    [CATransaction flush];
++    REXLOG_INFO("[metal] drawable restored to {}x{}", layer.drawableSize.width, layer.drawableSize.height);
++  }
++}
++
+ CAMetalLayerSurface::~CAMetalLayerSurface() {
+   if (metal_view_) {
+     SDL_Metal_DestroyView(static_cast<SDL_MetalView>(metal_view_));
+diff --git a/sdk/src/ui/vulkan/vulkan_device.cpp b/sdk/src/ui/vulkan/vulkan_device.cpp
+index 237b51f..30d16d4 100644
+--- a/sdk/src/ui/vulkan/vulkan_device.cpp
++++ b/sdk/src/ui/vulkan/vulkan_device.cpp
+@@ -45,6 +45,10 @@ REXCVAR_DEFINE_BOOL(vulkan_require_fill_mode_non_solid, !REX_PLATFORM_MAC, "UI/V
+                     "allow fallback to solid fill for line/point polygon modes)")
+     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+ 
++REXCVAR_DEFINE_BOOL(vulkan_force_shader_swizzle, false, "UI/Vulkan",
++                    "Use shader component swizzles even when image-view swizzles are supported")
++    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
++
+ namespace rex {
+ namespace ui {
+ namespace vulkan {
+@@ -735,6 +739,11 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+     XE_UI_VULKAN_FEATURE_IMPLIED(shaderSampleRateInterpolationFunctions)
+   }
+ 
++  if (with_gpu_emulation && REXCVAR_GET(vulkan_force_shader_swizzle)) {
++    device->properties_.imageViewFormatSwizzle = false;
++    REXLOG_INFO("Vulkan: forcing component swizzles in guest shaders");
++  }
++
+   if (ext_1_2_KHR_shader_float_controls) {
+     XE_UI_VULKAN_PROPERTY_2(properties_1_2_KHR_shader_float_controls,
+                             shaderSignedZeroInfNanPreserveFloat32);
+diff --git a/sdk/src/ui/vulkan/vulkan_presenter.cpp b/sdk/src/ui/vulkan/vulkan_presenter.cpp
+index 84fa5ee..ad9c77f 100644
+--- a/sdk/src/ui/vulkan/vulkan_presenter.cpp
++++ b/sdk/src/ui/vulkan/vulkan_presenter.cpp
+@@ -28,6 +28,11 @@
+ #include <rex/ui/vulkan/presenter.h>
+ #include <rex/ui/vulkan/util.h>
+ 
++REXCVAR_DEFINE_BOOL(vulkan_resize_diagnostics, false, "UI/Vulkan",
++                    "Log successful presentation after swapchain recreation");
++REXCVAR_DEFINE_BOOL(vulkan_metal_restore_drawable_size, true, "UI/Vulkan",
++                    "Restore CAMetalLayer drawable size after MoltenVK swapchain replacement");
++
+ #if defined(REX_HAS_FIDELITYFX_RUNTIME) && REX_HAS_FIDELITYFX_RUNTIME
+ #include <ffx_api/ffx_api.h>
+ #include <ffx_api/ffx_upscale.h>
+@@ -1223,6 +1228,17 @@ VulkanPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_su
+     // Successfully attached (at least for now).
+   }
+ 
++#if REX_PLATFORM_MAC
++  if (new_surface.GetType() == Surface::kTypeIndex_CAMetalLayer) {
++    // MoltenVK 1.4.1 may force the old chain's outstanding presentations to
++    // complete by setting the shared layer to 1x1 AFTER initializing the new
++    // chain. Restore the new chain's drawable extent before acquiring an image.
++    static_cast<CAMetalLayerSurface&>(new_surface).SynchronizeDrawableSize(
++        paint_context_.swapchain_extent.width, paint_context_.swapchain_extent.height,
++        REXCVAR_GET(vulkan_metal_restore_drawable_size));
++  }
++#endif
++
+   // From now on, in case of failure,
+   // paint_context_.DestroySwapchainAndVulkanSurface must be called before
+   // returning.
+@@ -1299,9 +1315,8 @@ VulkanPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_su
+         render_pass_attachment.loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR;
+   }
+ 
+-  // The anticipated acquisition semaphores, one more than Submissions (see presenter.h). They are
+-  // created once and survive swapchain recreation; what does have to be invalidated here is the
+-  // anticipated image, because it belonged to the old chain.
++  // Acquisition semaphores belong to this swapchain generation. Retirement
++  // drains and destroys the old ones, including an acquired but unpainted image.
+   {
+     VkSemaphoreCreateInfo info{};
+     info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+@@ -1390,6 +1405,7 @@ VulkanPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_su
+   }
+ 
+   is_vsync_implicit_out = paint_context_.swapchain_is_fifo;
++  paint_context_.swapchain_presented_frames = 0;
+   return SurfacePaintConnectResult::kSuccess;
+ }
+ 
+@@ -1889,11 +1905,46 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
+ }
+ 
+ VkSwapchainKHR VulkanPresenter::PaintContext::PrepareForSwapchainRetirement() {
++  const VulkanDevice::Functions& dfn = vulkan_device->functions();
++  const VkDevice device = vulkan_device->device();
+   if (swapchain != VK_NULL_HANDLE) {
+     submission_tracker.AwaitAllSubmissionsCompletion();
++    // A speculative acquire may have signaled a semaphore that no paint submit
++    // has waited on yet. Waiting for render fences alone does not consume it.
++    // Consume that signal before discarding the image and its semaphore.
++    if (early_valid) {
++      const VkPipelineStageFlags stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
++      VkSubmitInfo drain{VK_STRUCTURE_TYPE_SUBMIT_INFO};
++      drain.waitSemaphoreCount = 1;
++      drain.pWaitSemaphores = &early_semaphore;
++      drain.pWaitDstStageMask = &stage;
++      const auto queue = vulkan_device->AcquireQueue(vulkan_device->queue_family_graphics_compute(), 0);
++      VkResult result = dfn.vkQueueSubmit(queue.queue(), 1, &drain, VK_NULL_HANDLE);
++      if (result == VK_SUCCESS) result = dfn.vkQueueWaitIdle(queue.queue());
++      if (result != VK_SUCCESS) {
++        REXLOG_ERROR("VulkanPresenter: Failed to drain old swapchain acquisition: {}", int(result));
++      }
++    }
++    // Render completion doesn't imply completion of the presentation waits.
++    // Synchronize only at retirement, never in the normal frame loop.
++    if (present_queue_family != UINT32_MAX) {
++      const auto queue = vulkan_device->AcquireQueue(present_queue_family, 0);
++      VkResult result = dfn.vkQueueWaitIdle(queue.queue());
++      if (result != VK_SUCCESS) {
++        REXLOG_ERROR("VulkanPresenter: Failed to idle old presentation queue: {}", int(result));
++      }
++    }
+   }
+-  const VulkanDevice::Functions& dfn = vulkan_device->functions();
+-  const VkDevice device = vulkan_device->device();
++  for (VkSemaphore& semaphore : early_semaphores) {
++    if (semaphore != VK_NULL_HANDLE) {
++      dfn.vkDestroySemaphore(device, semaphore, nullptr);
++      semaphore = VK_NULL_HANDLE;
++    }
++  }
++  early_valid = false;
++  early_semaphore = VK_NULL_HANDLE;
++  early_image = UINT32_MAX;
++  early_next = 0;
+   for (const SwapchainFramebuffer& framebuffer : swapchain_framebuffers) {
+     dfn.vkDestroyFramebuffer(device, framebuffer.framebuffer, nullptr);
+     dfn.vkDestroyImageView(device, framebuffer.image_view, nullptr);
+@@ -1909,14 +1960,6 @@ VkSwapchainKHR VulkanPresenter::PaintContext::PrepareForSwapchainRetirement() {
+ }
+ 
+ void VulkanPresenter::PaintContext::DestroySwapchainAndVulkanSurface() {
+-  // The anticipated acquisition semaphores. Nothing is in flight here anymore.
+-  for (VkSemaphore& sem : early_semaphores) {
+-    if (sem != VK_NULL_HANDLE) {
+-      vulkan_device->functions().vkDestroySemaphore(vulkan_device->device(), sem, nullptr);
+-      sem = VK_NULL_HANDLE;
+-    }
+-  }
+-  early_valid = false;
+   VkSwapchainKHR old_swapchain = PrepareForSwapchainRetirement();
+   if (old_swapchain != VK_NULL_HANDLE) {
+     vulkan_device->functions().vkDestroySwapchainKHR(vulkan_device->device(), old_swapchain,
+@@ -2832,6 +2875,14 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_draw
+ 
+   switch (present_result) {
+     case VK_SUCCESS:
++      ++paint_context_.swapchain_presented_frames;
++      if (REXCVAR_GET(vulkan_resize_diagnostics) &&
++          (paint_context_.swapchain_presented_frames == 1 ||
++           paint_context_.swapchain_presented_frames == 60)) {
++        REXLOG_INFO("[resize] presented {} frames on {}x{} swapchain",
++                    paint_context_.swapchain_presented_frames,
++                    paint_context_.swapchain_extent.width, paint_context_.swapchain_extent.height);
++      }
+       return PaintResult::kPresented;
+     case VK_SUBOPTIMAL_KHR:
+       return PaintResult::kPresentedSuboptimal;

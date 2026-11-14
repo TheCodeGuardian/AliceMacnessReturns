@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.25)
+set(CMAKE_OSX_ARCHITECTURES arm64 CACHE STRING "macOS target architecture")
+project(AliceMacnessReturns LANGUAGES C CXX OBJCXX)
+if(NOT APPLE OR NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+    message(FATAL_ERROR "AliceMacnessReturns requires macOS ARM64")
+endif()
+add_subdirectory(app)

@@ -1,0 +1,784 @@
+diff --git a/sdk/include/rex/graphics/pipeline/render_target/cache.h b/sdk/include/rex/graphics/pipeline/render_target/cache.h
+index 3bbd52e..2456294 100644
+--- a/sdk/include/rex/graphics/pipeline/render_target/cache.h
++++ b/sdk/include/rex/graphics/pipeline/render_target/cache.h
+@@ -475,6 +475,7 @@ class RenderTargetCache {
+                                  xenos::MsaaSamples msaa_samples) const;
+ 
+   virtual RenderTarget* CreateRenderTarget(RenderTargetKey key) = 0;
++  const auto& render_targets_for_diagnostics() const { return render_targets_; }
+ 
+   // Whether depth buffer is encoded differently on the host, thus after
+   // aliasing naively, precision may be lost - host depth must only be
+diff --git a/sdk/include/rex/graphics/pipeline/shader/spirv_translator.h b/sdk/include/rex/graphics/pipeline/shader/spirv_translator.h
+index 72cb03a..c955925 100644
+--- a/sdk/include/rex/graphics/pipeline/shader/spirv_translator.h
++++ b/sdk/include/rex/graphics/pipeline/shader/spirv_translator.h
+@@ -33,7 +33,7 @@ class SpirvShaderTranslator : public ShaderTranslator {
+     // TODO(Triang3l): Change to 0xYYYYMMDD once it's out of the rapid
+     // prototyping stage (easier to do small granular updates with an
+     // incremental counter).
+-    static constexpr uint32_t kVersion = 12;
++    static constexpr uint32_t kVersion = 0x20261113;
+ 
+     enum class DepthStencilMode : uint32_t {
+       kNoModifiers,
+@@ -212,7 +212,7 @@ class SpirvShaderTranslator : public ShaderTranslator {
+   //
+   // Using the std140 layout - vec2 must be aligned to 8 bytes, vec3 and vec4 to
+   // 16 bytes.
+-  struct SystemConstants {
++  struct alignas(16) SystemConstants {
+     uint32_t flags;
+     uint32_t vertex_index_load_address;
+     xenos::Endian vertex_index_endian;
+@@ -223,31 +223,31 @@ class SpirvShaderTranslator : public ShaderTranslator {
+     uint32_t vertex_index_reset;
+     // Number of guest vertices processed by the memexport compute dispatch.
+     uint32_t compute_memexport_vertex_count;
+-    float user_clip_planes[6][4];
++    alignas(16) float user_clip_planes[6][4];
+ 
+-    float ndc_scale[3];
++    alignas(16) float ndc_scale[3];
+     float point_vertex_diameter_min;
+ 
+-    float ndc_offset[3];
++    alignas(16) float ndc_offset[3];
+     float point_vertex_diameter_max;
+ 
+-    float point_constant_diameter[2];
++    alignas(8) float point_constant_diameter[2];
+     // Diameter in guest screen coordinates > radius (0.5 * diameter) in the NDC
+     // for the host viewport.
+-    float point_screen_diameter_to_ndc_radius[2];
++    alignas(8) float point_screen_diameter_to_ndc_radius[2];
+     // One bit per texture fetch constant indicating that it references a
+     // draw-resolution-scaled texture.
+     uint32_t textures_resolution_scaled;
+ 
+     // Each byte contains post-swizzle TextureSign values for each of the needed
+     // components of each of the 32 used texture fetch constants.
+-    uint32_t texture_swizzled_signs[8];
++    alignas(16) uint32_t texture_swizzled_signs[8];
+ 
+     // If the imageViewFormatSwizzle portability subset is not supported, the
+     // component swizzle (taking both guest and host swizzles into account) to
+     // apply to the result directly in the shader code. In each uint32_t,
+     // swizzles for 2 texture fetch constants (in bits 0:11 and 12:23).
+-    uint32_t texture_swizzles[16];
++    alignas(16) uint32_t texture_swizzles[16];
+ 
+     float alpha_test_reference;
+     // Bits 0:7 - alpha-to-coverage dither offsets from RB_COLORCONTROL bits
+@@ -256,7 +256,7 @@ class SpirvShaderTranslator : public ShaderTranslator {
+     uint32_t edram_32bpp_tile_pitch_dwords_scaled;
+     uint32_t edram_depth_base_dwords_scaled;
+ 
+-    float color_exp_bias[4];
++    alignas(16) float color_exp_bias[4];
+ 
+     float edram_poly_offset_front_scale;
+     float edram_poly_offset_back_scale;
+@@ -277,30 +277,30 @@ class SpirvShaderTranslator : public ShaderTranslator {
+       };
+     };
+ 
+-    uint32_t edram_rt_base_dwords_scaled[4];
++    alignas(16) uint32_t edram_rt_base_dwords_scaled[4];
+ 
+     // RT format combined with RenderTargetCache::kPSIColorFormatFlag values
+     // (pass via RenderTargetCache::AddPSIColorFormatFlags).
+-    uint32_t edram_rt_format_flags[4];
++    alignas(16) uint32_t edram_rt_format_flags[4];
+ 
+     // Render target blending options - RB_BLENDCONTROL, with only the relevant
+     // options (factors and operations - AND 0x1FFF1FFF). If 0x00010001
+     // (1 * src + 0 * dst), blending is disabled for the render target.
+-    uint32_t edram_rt_blend_factors_ops[4];
++    alignas(16) uint32_t edram_rt_blend_factors_ops[4];
+ 
+     // Format info - mask to apply to the old packed RT data, and to apply as
+     // inverted to the new packed data, before storing (more or less the inverse
+     // of the write mask packed like render target channels). This can be used
+     // to bypass unpacking if blending is not used. If 0 and not blending,
+     // reading the old data from the EDRAM buffer is not required.
+-    uint32_t edram_rt_keep_mask[4][2];
++    alignas(16) uint32_t edram_rt_keep_mask[4][2];
+ 
+     // Format info - values to clamp the color to before blending or storing.
+     // Low color, low alpha, high color, high alpha.
+-    float edram_rt_clamp[4][4];
++    alignas(16) float edram_rt_clamp[4][4];
+ 
+     // The constant blend factor for the respective modes.
+-    float edram_blend_constant[4];
++    alignas(16) float edram_blend_constant[4];
+ 
+     // Tessellation helper shader constants.
+     uint32_t vertex_index_min;
+@@ -309,6 +309,21 @@ class SpirvShaderTranslator : public ShaderTranslator {
+     float tessellation_factor_range_max;
+   };
+ 
++  // These offsets are emitted as SPIR-V uniform member offsets. Arrays of
++  // vec4 retain 16-byte alignment even when preceded by scalar additions.
++  static_assert(offsetof(SystemConstants, user_clip_planes) % 16 == 0);
++  static_assert(offsetof(SystemConstants, ndc_scale) % 16 == 0);
++  static_assert(offsetof(SystemConstants, ndc_offset) % 16 == 0);
++  static_assert(offsetof(SystemConstants, texture_swizzled_signs) % 16 == 0);
++  static_assert(offsetof(SystemConstants, texture_swizzles) % 16 == 0);
++  static_assert(offsetof(SystemConstants, color_exp_bias) % 16 == 0);
++  static_assert(offsetof(SystemConstants, edram_rt_base_dwords_scaled) % 16 == 0);
++  static_assert(offsetof(SystemConstants, edram_rt_format_flags) % 16 == 0);
++  static_assert(offsetof(SystemConstants, edram_rt_blend_factors_ops) % 16 == 0);
++  static_assert(offsetof(SystemConstants, edram_rt_keep_mask) % 16 == 0);
++  static_assert(offsetof(SystemConstants, edram_rt_clamp) % 16 == 0);
++  static_assert(offsetof(SystemConstants, edram_blend_constant) % 16 == 0);
++
+   enum ConstantBuffer : uint32_t {
+     kConstantBufferSystem,
+     kConstantBufferFloatVertex,
+diff --git a/sdk/include/rex/graphics/vulkan/command_processor.h b/sdk/include/rex/graphics/vulkan/command_processor.h
+index 696ff48..94b0b69 100644
+--- a/sdk/include/rex/graphics/vulkan/command_processor.h
++++ b/sdk/include/rex/graphics/vulkan/command_processor.h
+@@ -416,6 +416,8 @@ class VulkanCommandProcessor : public CommandProcessor {
+   // clearing and stopping capturing. Returns whether the submission was done
+   // successfully, if it has failed, leaves it open.
+   bool EndSubmission(bool is_swap);
++  friend class VulkanTextureCache;
++  friend class VulkanRenderTargetCache;
+   bool AwaitAllQueueOperationsCompletion() {
+     CheckSubmissionFenceAndDeviceLoss(GetCurrentSubmission());
+     return !submission_open_ && submissions_in_flight_fences_.empty();
+diff --git a/sdk/include/rex/graphics/vulkan/texture_cache.h b/sdk/include/rex/graphics/vulkan/texture_cache.h
+index 04856ee..4adf3ca 100644
+--- a/sdk/include/rex/graphics/vulkan/texture_cache.h
++++ b/sdk/include/rex/graphics/vulkan/texture_cache.h
+@@ -267,8 +267,7 @@ class VulkanTextureCache final : public TextureCache {
+ 
+     std::unordered_map<ViewKey, VkImageView, ViewKey::Hasher> views_;
+     std::unique_ptr<VulkanTexture> texture_3d_as_2d_;
+-    VkImageView image_view_3d_as_2d_unsigned_ = VK_NULL_HANDLE;
+-    VkImageView image_view_3d_as_2d_signed_ = VK_NULL_HANDLE;
++    std::unordered_map<uint32_t, VkImageView> views_3d_as_2d_;
+   };
+ 
+   struct VulkanTextureBinding {
+diff --git a/sdk/src/graphics/pipeline/render_target/cache.cpp b/sdk/src/graphics/pipeline/render_target/cache.cpp
+index 953c5fd..0e91ba2 100644
+--- a/sdk/src/graphics/pipeline/render_target/cache.cpp
++++ b/sdk/src/graphics/pipeline/render_target/cache.cpp
+@@ -37,6 +37,10 @@ REXCVAR_DEFINE_BOOL(execute_unclipped_draw_vs_on_cpu_for_psi_render_backend, tru
+ REXCVAR_DEFINE_BOOL(snorm16_render_target_full_range, true, "GPU",
+                     "Use full range for SNORM16 render targets");
+ 
++REXCVAR_DEFINE_BOOL(skip_depth_color_7e3_aliasing_transfers, false, "GPU",
++                    "Preserve HDR color contents when UE3 reuses depth EDRAM tiles")
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
+ REXCVAR_DEFINE_BOOL(direct_host_resolve, true, "GPU",
+                     "Resolve from host render targets directly to shared memory when possible")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+@@ -1291,10 +1295,20 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+       }
+       if (transfers_append_out) {
+         RenderTargetKey transfer_source = it->second.render_target;
++        // Some UE3 titles reuse depth tiles while retaining the existing HDR
++        // color image. Reinterpreting those depth bits as 7e3 colors corrupts
++        // that image. Keep the reverse color-to-depth transfer intact.
++        const bool skip_depth_to_hdr =
++            REXCVAR_GET(skip_depth_color_7e3_aliasing_transfers) &&
++            GetPath() == Path::kHostRenderTargets &&
++            transfer_source.is_depth && !dest.is_depth &&
++            (dest.GetColorFormat() == xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT ||
++             dest.GetColorFormat() ==
++                 xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT_AS_16_16_16_16);
+         // Only perform the copying when actually changing the latest owner, not
+         // just the latest host depth owner - the transfer source is expected to
+         // be different than the destination.
+-        if (!transfer_source.IsEmpty() && transfer_source != dest) {
++        if (!transfer_source.IsEmpty() && transfer_source != dest && !skip_depth_to_hdr) {
+           uint32_t transfer_end_tiles = std::min(it->second.end_tiles, extent_end);
+           if (!resolve_clear_cutout ||
+               Transfer::GetRangeRectangles(it->first, transfer_end_tiles, dest.base_tiles,
+diff --git a/sdk/src/graphics/pipeline/shader/spirv_translator.cpp b/sdk/src/graphics/pipeline/shader/spirv_translator.cpp
+index 38fc7d1..af4e406 100644
+--- a/sdk/src/graphics/pipeline/shader/spirv_translator.cpp
++++ b/sdk/src/graphics/pipeline/shader/spirv_translator.cpp
+@@ -499,10 +499,10 @@ void SpirvShaderTranslator::StartTranslation() {
+     var_main_vfetch_address_ =
+         builder_->createVariable(spv::NoPrecision, spv::StorageClassFunction, type_int_,
+                                  "xe_var_vfetch_address", const_int_0_);
+-    var_main_tfetch_lod_ =
+     var_main_vfetch_bound_ =
+         builder_->createVariable(spv::NoPrecision, spv::StorageClassFunction, type_int_,
+                                  "xe_var_vfetch_bound", const_int_0_);
++    var_main_tfetch_lod_ =
+         builder_->createVariable(spv::NoPrecision, spv::StorageClassFunction, type_float_,
+                                  "xe_var_tfetch_lod", const_float_0_);
+     var_main_tfetch_gradients_h_ =
+diff --git a/sdk/src/graphics/vulkan/command_processor.cpp b/sdk/src/graphics/vulkan/command_processor.cpp
+index e7b2890..7c27ff7 100644
+--- a/sdk/src/graphics/vulkan/command_processor.cpp
++++ b/sdk/src/graphics/vulkan/command_processor.cpp
+@@ -12,6 +12,7 @@
+ #include <algorithm>
+ #include <array>
+ #include <cstdint>
++#include <chrono>
+ #include <cstring>
+ #include <iterator>
+ #include <mutex>
+@@ -59,6 +60,10 @@ REXCVAR_DEFINE_BOOL(vulkan_readback_resolve, false, "GPU/Vulkan",
+                     "Read render-to-texture results on the CPU")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+ 
++REXCVAR_DEFINE_BOOL(alice_identity_gamma, false, "GPU/Vulkan", "Diagnostic linear scanout gamma table");
++
++REXCVAR_DEFINE_BOOL(alice_frame_timing, false, "GPU/Vulkan", "Log guest swap interval percentiles every 120 frames");
++
+ REXCVAR_DEFINE_BOOL(vulkan_readback_memexport, false, "GPU/Vulkan",
+                     "Read data written by memory export in shaders on the CPU")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+@@ -2290,6 +2295,22 @@ extern "C" bool RexSwitchPerfSkip(unsigned bit);
+ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width,
+                                        uint32_t frontbuffer_height) {
+   SCOPE_profile_cpu_f("gpu");
++  if (REXCVAR_GET(alice_frame_timing)) {
++    using Clock = std::chrono::steady_clock;
++    static auto previous = Clock::now();
++    static std::vector<double> intervals;
++    const auto now = Clock::now();
++    intervals.push_back(std::chrono::duration<double, std::milli>(now - previous).count());
++    previous = now;
++    if (intervals.size() == 120) {
++      double sum = 0;
++      for (double interval : intervals) sum += interval;
++      std::sort(intervals.begin(), intervals.end());
++      REXGPU_INFO("[frame] guest swap mean {:.2f} ms, p50 {:.2f}, p95 {:.2f}, max {:.2f}",
++                  sum / intervals.size(), intervals[60], intervals[114], intervals.back());
++      intervals.clear();
++    }
++  }
+ #if REX_PLATFORM_SWITCH
+   RexSwitchPerfCount(0);
+   const bool has_video_native = RexNativeVideoBeginSwap && RexNativeVideoBeginSwap();
+@@ -2583,6 +2604,24 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontb
+                                            : static_cast<const void*>(gamma_ramp_256_entry_table()),
+                         gamma_ramp_size);
+           }
++          if (REXCVAR_GET(alice_identity_gamma)) {
++            if (use_pwl_gamma_ramp) {
++              auto* ramp = static_cast<reg::DC_LUT_PWL_DATA*>(gamma_ramp_frame_upload);
++              for (uint32_t i = 0; i < 128; ++i) {
++                reg::DC_LUT_PWL_DATA entry = {};
++                entry.base = (i * 0xFFFF / 0x7F) & ~UINT32_C(0x3F);
++                entry.delta = i < 0x7F ? 0x200 : 0;
++                for (uint32_t channel = 0; channel < 3; ++channel) ramp[i * 3 + channel] = entry;
++              }
++            } else {
++              auto* ramp = static_cast<reg::DC_LUT_30_COLOR*>(gamma_ramp_frame_upload);
++              for (uint32_t i = 0; i < 256; ++i) {
++                reg::DC_LUT_30_COLOR entry = {};
++                entry.color_10_red = entry.color_10_green = entry.color_10_blue = i * 0x3FF / 0xFF;
++                ramp[i] = entry;
++              }
++            }
++          }
+           bool gamma_ramp_has_upload_buffer = gamma_ramp_upload_buffer_memory_ != VK_NULL_HANDLE;
+           VkPipelineStageFlags gamma_ramp_read_stage_mask =
+               VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+diff --git a/sdk/src/graphics/vulkan/render_target_cache.cpp b/sdk/src/graphics/vulkan/render_target_cache.cpp
+index 3f41047..6231697 100644
+--- a/sdk/src/graphics/vulkan/render_target_cache.cpp
++++ b/sdk/src/graphics/vulkan/render_target_cache.cpp
+@@ -13,6 +13,8 @@
+ #include <array>
+ #include <cstddef>
+ #include <cstdint>
++#include <chrono>
++#include <filesystem>
+ #include <cstring>
+ #include <memory>
+ #include <tuple>
+@@ -37,6 +39,9 @@
+ #include <rex/math.h>
+ #include <rex/ui/vulkan/util.h>
+ 
++#include "diagnostic_image_capture.h"
++REXCVAR_DEFINE_STRING(alice_capture_resolves, "", "GPU/Vulkan", "Directory for diagnostic pre-resolve images");
++REXCVAR_DEFINE_UINT32(alice_capture_resolves_seconds, 90, "GPU/Vulkan", "Delay before pre-resolve capture");
+ REXCVAR_DEFINE_STRING(render_target_path_vulkan, "", "GPU/Vulkan",
+                       "Vulkan render target implementation path")
+     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+@@ -1158,6 +1163,72 @@ bool VulkanRenderTargetCache::Resolve(const memory::Memory& memory,
+                            uint64_t(resolve_info.height_div_8) * 8);
+ #endif
+ 
++  if (!REXCVAR_GET(alice_capture_resolves).empty() && GetPath() == Path::kHostRenderTargets) {
++    using Clock = std::chrono::steady_clock;
++    static auto first_resolve = Clock::now();
++    static uint32_t captured_resolves = 0;
++    if (captured_resolves < 12 &&
++        Clock::now() - first_resolve >= std::chrono::seconds(REXCVAR_GET(alice_capture_resolves_seconds))) {
++      uint32_t base, row_length, rows, pitch;
++      resolve_info.GetCopyEdramTileSpan(base, row_length, rows, pitch);
++      std::vector<ResolveCopyDumpRectangle> rectangles;
++      GetResolveCopyRectanglesToDump(base, row_length, rows, pitch, rectangles);
++      const uint32_t ordinal = captured_resolves++;
++      std::filesystem::create_directories(REXCVAR_GET(alice_capture_resolves));
++      const std::string state_path = REXCVAR_GET(alice_capture_resolves) + "/resolve_" +
++          std::to_string(ordinal) + ".regs.bin";
++      if (FILE* state = std::fopen(state_path.c_str(), "wb")) {
++        std::fwrite(register_file().values, sizeof(uint32_t), RegisterFile::kRegisterCount, state);
++        std::fclose(state);
++      }
++      const Shader* last_pixel_shader = command_processor_.active_pixel_shader();
++      REXGPU_INFO("[resolve-capture] pass {} last_pixel_shader={:016X} registers={}",
++                  ordinal, last_pixel_shader ? last_pixel_shader->ucode_data_hash() : 0, state_path);
++      std::vector<VulkanRenderTarget*> targets;
++      for (const auto& rectangle : rectangles) {
++        targets.push_back(static_cast<VulkanRenderTarget*>(rectangle.render_target));
++      }
++      if (ordinal == 0) {
++        // Ownership ranges may no longer name the scene target after a depth
++        // aliasing pass. Preserve the cached full-width HDR targets as well.
++        for (const auto& entry : render_targets_for_diagnostics()) {
++          const auto key = entry.first;
++          auto* target = static_cast<VulkanRenderTarget*>(entry.second);
++          if (target && !key.is_depth && key.GetWidth() >= 640 &&
++              key.GetColorFormat() == xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT &&
++              target->current_layout() != VK_IMAGE_LAYOUT_UNDEFINED &&
++              std::find(targets.begin(), targets.end(), target) == targets.end()) targets.push_back(target);
++        }
++      }
++      uint32_t part = 0;
++      for (auto* target_ptr : targets) {
++        auto& target = *target_ptr;
++        const auto key = target.key();
++        if (key.is_depth) continue;
++        if (key.msaa_samples == xenos::MsaaSamples::k2X && !msaa_2x_attachments_supported_) continue;
++        command_processor_.PushImageMemoryBarrier(target.image(),
++            ui::vulkan::util::InitializeSubresourceRange(), target.current_stage_mask(),
++            VK_PIPELINE_STAGE_TRANSFER_BIT, target.current_access_mask(), VK_ACCESS_TRANSFER_READ_BIT,
++            target.current_layout(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
++        target.SetUsage(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
++                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
++        command_processor_.SubmitBarriers(true);
++        if (!command_processor_.EndSubmission(false) ||
++            !command_processor_.AwaitAllQueueOperationsCompletion()) return false;
++        const std::string path = REXCVAR_GET(alice_capture_resolves) + "/resolve_" +
++            std::to_string(ordinal) + "_" + std::to_string(part++) + ".bin";
++        const uint32_t width = key.GetWidth() * draw_resolution_scale_x();
++        const uint32_t height = GetRenderTargetHeight(key.pitch_tiles_at_32bpp, key.msaa_samples) * draw_resolution_scale_y();
++        const bool saved = CaptureSwapSource(command_processor_.GetVulkanDevice(), target.image(), width, height,
++            GetColorVulkanFormat(key.GetColorFormat()), xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA, path, 1,
++            VkSampleCountFlagBits(uint32_t(1) << uint32_t(key.msaa_samples)));
++        REXGPU_INFO("[resolve-capture] {} destination=0x{:08X} source_format={} msaa={} base={} saved={}",
++                    path, resolve_info.copy_dest_base, uint32_t(key.GetColorFormat()),
++                    uint32_t(key.msaa_samples), uint32_t(key.base_tiles), saved);
++        if (!command_processor_.BeginSubmission(true)) return false;
++      }
++    }
++  }
+   const ui::vulkan::VulkanDevice* const vulkan_device = command_processor_.GetVulkanDevice();
+   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
+   const VkDevice device = vulkan_device->device();
+@@ -1903,6 +1974,9 @@ RenderTargetCache::RenderTarget* VulkanRenderTargetCache::CreateRenderTarget(Ren
+   }
+   image_create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+   image_create_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
++  if (!REXCVAR_GET(alice_capture_resolves).empty() && !key.is_depth) {
++    image_create_info.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
++  }
+   image_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+   image_create_info.queueFamilyIndexCount = 0;
+   image_create_info.pQueueFamilyIndices = nullptr;
+diff --git a/sdk/src/graphics/vulkan/shader.cpp b/sdk/src/graphics/vulkan/shader.cpp
+index c2805b2..7ad2178 100644
+--- a/sdk/src/graphics/vulkan/shader.cpp
++++ b/sdk/src/graphics/vulkan/shader.cpp
+@@ -12,6 +12,8 @@
+ #include <cstdint>
+ 
+ #include <rex/assert.h>
++#include <rex/cvar.h>
++#include <rex/graphics/flags.h>
+ #include <rex/graphics/vulkan/shader.h>
+ #include <rex/logging.h>
+ #include <rex/ui/vulkan/provider.h>
+@@ -34,6 +36,9 @@ VkShaderModule VulkanShader::VulkanTranslation::GetOrCreateShaderModule() {
+   if (shader_module_ != VK_NULL_HANDLE) {
+     return shader_module_;
+   }
++  if (!REXCVAR_GET(dump_shaders).empty()) {
++    Dump(REXCVAR_GET(dump_shaders), "spv");
++  }
+   const ui::vulkan::VulkanDevice* const vulkan_device =
+       static_cast<const VulkanShader&>(shader()).vulkan_device_;
+   VkShaderModuleCreateInfo shader_module_create_info;
+diff --git a/sdk/src/graphics/vulkan/texture_cache.cpp b/sdk/src/graphics/vulkan/texture_cache.cpp
+index 383f182..35e4020 100644
+--- a/sdk/src/graphics/vulkan/texture_cache.cpp
++++ b/sdk/src/graphics/vulkan/texture_cache.cpp
+@@ -13,6 +13,9 @@
+ #include <array>
+ #include <cstddef>
+ #include <cstring>
++#include <chrono>
++#include <filesystem>
++#include <unordered_set>
+ #include <utility>
+ 
+ #include <rex/assert.h>
+@@ -33,6 +36,19 @@
+ #include <rex/ui/vulkan/ui_samplers.h>
+ #include <rex/ui/vulkan/util.h>
+ 
++#include "diagnostic_image_capture.h"
++REXCVAR_DEFINE_STRING(alice_capture_textures, "", "GPU/Vulkan", "Directory for diagnostic shader input textures");
++REXCVAR_DEFINE_UINT32(alice_capture_textures_seconds, 90, "GPU/Vulkan", "Delay before capturing input textures");
++REXCVAR_DEFINE_BOOL(alice_capture_textures_3d_only, false, "GPU/Vulkan", "Capture only volume textures, including all depth slices");
++REXCVAR_DEFINE_BOOL(alice_texture_base_mip_only, false, "GPU/Vulkan",
++                    "Diagnostic: clamp all texture sampling to mip zero")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_BOOL(vulkan_decompress_bc_textures, false, "GPU/Vulkan",
++                    "Use compute decompression instead of native BC1-BC5 sampling")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
++REXCVAR_DEFINE_STRING(alice_capture_source, "", "GPU/Vulkan", "Diagnostic raw scanout image path");
++REXCVAR_DEFINE_UINT32(alice_capture_swap, 2800, "GPU/Vulkan", "Guest swap ordinal to capture");
+ REXCVAR_DEFINE_BOOL(non_seamless_cube_map, false, "GPU", "Use non-seamless cube map sampling");
+ 
+ #include <rex/platform.h>
+@@ -637,6 +653,42 @@ void VulkanTextureCache::RequestTextures(uint32_t used_texture_mask) {
+       }
+     }
+   }
++  if (!REXCVAR_GET(alice_capture_textures).empty()) {
++    using Clock = std::chrono::steady_clock;
++    static const auto start = Clock::now();
++    static std::unordered_set<uint64_t> captured;
++    if (Clock::now() - start >= std::chrono::seconds(REXCVAR_GET(alice_capture_textures_seconds)) && captured.size() < 32) {
++      uint32_t remaining = used_texture_mask;
++      uint32_t slot;
++      while (captured.size() < 32 && rex::bit_scan_forward(remaining, &slot)) {
++        remaining &= ~(uint32_t(1) << slot);
++        const auto* binding = GetValidTextureBinding(slot);
++        if (!binding || !binding->texture) continue;
++        const auto key = binding->key;
++        const bool volume = key.dimension == xenos::DataDimension::k3D;
++        if (REXCVAR_GET(alice_capture_textures_3d_only) && !volume) continue;
++        if ((!volume && (key.dimension != xenos::DataDimension::k2DOrStacked ||
++                        key.depth_or_array_size_minus_1)) || key.scaled_resolve) continue;
++        const uint64_t id = uint64_t(key.base_page) | (uint64_t(key.format) << 32);
++        if (!captured.insert(id).second) continue;
++        auto* texture = static_cast<VulkanTexture*>(binding->texture);
++        command_processor_.SubmitBarriers(true);
++        if (!command_processor_.EndSubmission(false) ||
++            !command_processor_.AwaitAllQueueOperationsCompletion()) return;
++        std::filesystem::create_directories(REXCVAR_GET(alice_capture_textures));
++        const std::string path = REXCVAR_GET(alice_capture_textures) + "/texture_" +
++            std::to_string(captured.size()) + ".bin";
++        const auto format = GetHostFormatPair(key).format_unsigned.format;
++        const bool saved = CaptureSwapSource(command_processor_.GetVulkanDevice(), texture->image(),
++            key.GetWidth(), key.GetHeight(), format, binding->host_swizzle, path,
++            volume ? key.GetDepthOrArraySize() : 1);
++        REXGPU_INFO("[texture-capture] {} slot={} base=0x{:08X} guest_format={} host_format={} saved={}",
++                    path, slot, uint32_t(key.base_page) << 12, uint32_t(key.format), uint32_t(format), saved);
++        if (!command_processor_.BeginSubmission(true)) return;
++      }
++    }
++  }
++
+ }
+ 
+ VkImageView VulkanTextureCache::GetActiveBindingOrNullImageView(uint32_t fetch_constant_index,
+@@ -889,6 +941,10 @@ VkSampler VulkanTextureCache::UseSampler(SamplerParameters parameters, bool& has
+   } else {
+     sampler_create_info.maxLod = VK_LOD_CLAMP_NONE;
+   }
++  if (REXCVAR_GET(alice_texture_base_mip_only)) {
++    sampler_create_info.minLod = 0.0f;
++    sampler_create_info.maxLod = 0.0f;
++  }
+   bool uses_custom_border_color = false;
+   VkSamplerCustomBorderColorCreateInfoEXT sampler_custom_border_color_create_info = {};
+   const bool custom_border_colors_supported = vulkan_device->properties().customBorderColors;
+@@ -1054,6 +1110,18 @@ VkImageView VulkanTextureCache::RequestSwapTexture(uint32_t& width_scaled_out,
+   width_scaled_out = key.GetWidth() * (key.scaled_resolve ? draw_resolution_scale_x() : 1);
+   height_scaled_out = key.GetHeight() * (key.scaled_resolve ? draw_resolution_scale_y() : 1);
+   format_out = key.format;
++  static uint32_t diagnostic_swap = 0;
++  if (!REXCVAR_GET(alice_capture_source).empty() &&
++      ++diagnostic_swap == REXCVAR_GET(alice_capture_swap)) {
++    command_processor_.SubmitBarriers(true);
++    if (command_processor_.EndSubmission(false) &&
++        command_processor_.AwaitAllQueueOperationsCompletion()) {
++      bool captured = CaptureSwapSource(command_processor_.GetVulkanDevice(), texture->image(),
++          width_scaled_out, height_scaled_out, GetHostFormatPair(key).format_unsigned.format,
++          host_swizzle, REXCVAR_GET(alice_capture_source));
++      REXGPU_INFO("[capture] raw scanout capture {}", captured ? "saved" : "failed");
++    }
++  }
+   return texture_view;
+ }
+ 
+@@ -1188,6 +1256,9 @@ std::unique_ptr<TextureCache::Texture> VulkanTextureCache::CreateTexture(Texture
+   image_create_info.samples = VK_SAMPLE_COUNT_1_BIT;
+   image_create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+   image_create_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
++  if (!REXCVAR_GET(alice_capture_source).empty() || !REXCVAR_GET(alice_capture_textures).empty()) {
++    image_create_info.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
++  }
+   image_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+   image_create_info.queueFamilyIndexCount = 0;
+   image_create_info.pQueueFamilyIndices = nullptr;
+@@ -1874,11 +1945,8 @@ VulkanTextureCache::VulkanTexture::~VulkanTexture() {
+   for (const auto& view_pair : views_) {
+     dfn.vkDestroyImageView(device, view_pair.second, nullptr);
+   }
+-  if (image_view_3d_as_2d_unsigned_ != VK_NULL_HANDLE) {
+-    dfn.vkDestroyImageView(device, image_view_3d_as_2d_unsigned_, nullptr);
+-  }
+-  if (image_view_3d_as_2d_signed_ != VK_NULL_HANDLE) {
+-    dfn.vkDestroyImageView(device, image_view_3d_as_2d_signed_, nullptr);
++  for (const auto& [key, view] : views_3d_as_2d_) {
++    if (view != VK_NULL_HANDLE) dfn.vkDestroyImageView(device, view, nullptr);
+   }
+   vmaDestroyImage(vulkan_texture_cache.vma_allocator_, image_, allocation_);
+ }
+@@ -1973,8 +2041,14 @@ VkImageView VulkanTextureCache::VulkanTexture::GetOrCreate3DAs2DImageView(bool i
+     return VK_NULL_HANDLE;
+   }
+ 
+-  VkImageView& cached_view =
+-      is_signed ? image_view_3d_as_2d_signed_ : image_view_3d_as_2d_unsigned_;
++  const auto* view_device = static_cast<VulkanTextureCache&>(texture_cache())
++                           .command_processor_.GetVulkanDevice();
++  if (!view_device->properties().imageViewFormatSwizzle) {
++    host_swizzle = xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA;
++  }
++  // Channel mapping is part of the view identity, just as for ordinary texture views.
++  const uint32_t view_key = (host_swizzle << 1) | uint32_t(is_signed);
++  VkImageView& cached_view = views_3d_as_2d_[view_key];
+   if (cached_view != VK_NULL_HANDLE) {
+     return cached_view;
+   }
+@@ -2489,7 +2563,8 @@ bool VulkanTextureCache::Initialize() {
+   assert_true(host_format_dxt1.format_unsigned.format == VK_FORMAT_BC1_RGBA_UNORM_BLOCK);
+   ifn.vkGetPhysicalDeviceFormatProperties(physical_device, VK_FORMAT_BC1_RGBA_UNORM_BLOCK,
+                                           &format_properties);
+-  if ((format_properties.optimalTilingFeatures & kLinearFilterFeatures) != kLinearFilterFeatures) {
++  if (REXCVAR_GET(vulkan_decompress_bc_textures) ||
++      (format_properties.optimalTilingFeatures & kLinearFilterFeatures) != kLinearFilterFeatures) {
+     host_format_dxt1.format_unsigned.load_shader = kLoadShaderIndexDXT1ToRGBA8;
+     host_format_dxt1.format_unsigned.format = VK_FORMAT_R8G8B8A8_UNORM;
+     host_format_dxt1.format_unsigned.block_compressed = false;
+@@ -2499,7 +2574,8 @@ bool VulkanTextureCache::Initialize() {
+   assert_true(host_format_dxt2_3.format_unsigned.format == VK_FORMAT_BC2_UNORM_BLOCK);
+   ifn.vkGetPhysicalDeviceFormatProperties(physical_device, VK_FORMAT_BC2_UNORM_BLOCK,
+                                           &format_properties);
+-  if ((format_properties.optimalTilingFeatures & kLinearFilterFeatures) != kLinearFilterFeatures) {
++  if (REXCVAR_GET(vulkan_decompress_bc_textures) ||
++      (format_properties.optimalTilingFeatures & kLinearFilterFeatures) != kLinearFilterFeatures) {
+     host_format_dxt2_3.format_unsigned.load_shader = kLoadShaderIndexDXT3ToRGBA8;
+     host_format_dxt2_3.format_unsigned.format = VK_FORMAT_R8G8B8A8_UNORM;
+     host_format_dxt2_3.format_unsigned.block_compressed = false;
+@@ -2509,7 +2585,8 @@ bool VulkanTextureCache::Initialize() {
+   assert_true(host_format_dxt4_5.format_unsigned.format == VK_FORMAT_BC3_UNORM_BLOCK);
+   ifn.vkGetPhysicalDeviceFormatProperties(physical_device, VK_FORMAT_BC3_UNORM_BLOCK,
+                                           &format_properties);
+-  if ((format_properties.optimalTilingFeatures & kLinearFilterFeatures) != kLinearFilterFeatures) {
++  if (REXCVAR_GET(vulkan_decompress_bc_textures) ||
++      (format_properties.optimalTilingFeatures & kLinearFilterFeatures) != kLinearFilterFeatures) {
+     host_format_dxt4_5.format_unsigned.load_shader = kLoadShaderIndexDXT5ToRGBA8;
+     host_format_dxt4_5.format_unsigned.format = VK_FORMAT_R8G8B8A8_UNORM;
+     host_format_dxt4_5.format_unsigned.block_compressed = false;
+@@ -2519,7 +2596,8 @@ bool VulkanTextureCache::Initialize() {
+   assert_true(host_format_dxn.format_unsigned.format == VK_FORMAT_BC5_UNORM_BLOCK);
+   ifn.vkGetPhysicalDeviceFormatProperties(physical_device, VK_FORMAT_BC5_UNORM_BLOCK,
+                                           &format_properties);
+-  if ((format_properties.optimalTilingFeatures & kLinearFilterFeatures) != kLinearFilterFeatures) {
++  if (REXCVAR_GET(vulkan_decompress_bc_textures) ||
++      (format_properties.optimalTilingFeatures & kLinearFilterFeatures) != kLinearFilterFeatures) {
+     host_format_dxn.format_unsigned.load_shader = kLoadShaderIndexDXNToRG8;
+     host_format_dxn.format_unsigned.format = VK_FORMAT_R8G8_UNORM;
+     host_format_dxn.format_unsigned.block_compressed = false;
+@@ -2528,7 +2606,8 @@ bool VulkanTextureCache::Initialize() {
+   assert_true(host_format_dxt5a.format_unsigned.format == VK_FORMAT_BC4_UNORM_BLOCK);
+   ifn.vkGetPhysicalDeviceFormatProperties(physical_device, VK_FORMAT_BC4_UNORM_BLOCK,
+                                           &format_properties);
+-  if ((format_properties.optimalTilingFeatures & kLinearFilterFeatures) != kLinearFilterFeatures) {
++  if (REXCVAR_GET(vulkan_decompress_bc_textures) ||
++      (format_properties.optimalTilingFeatures & kLinearFilterFeatures) != kLinearFilterFeatures) {
+     host_format_dxt5a.format_unsigned.load_shader = kLoadShaderIndexDXT5AToR8;
+     host_format_dxt5a.format_unsigned.format = VK_FORMAT_R8_UNORM;
+     host_format_dxt5a.format_unsigned.block_compressed = false;
+diff --git a/sdk/src/graphics/vulkan/diagnostic_image_capture.h b/sdk/src/graphics/vulkan/diagnostic_image_capture.h
+new file mode 100644
+index 0000000..d29853e
+--- /dev/null
++++ b/sdk/src/graphics/vulkan/diagnostic_image_capture.h
+@@ -0,0 +1,159 @@
++#pragma once
++#include <cstdio>
++
++// Synchronous diagnostic readback. The caller has completed its submissions,
++// and the image is in SHADER_READ_ONLY_OPTIMAL on the graphics queue.
++static bool CaptureSwapSource(const rex::ui::vulkan::VulkanDevice* gpu, VkImage image,
++                              uint32_t width, uint32_t height, VkFormat format,
++                              uint32_t swizzle, const std::string& path, uint32_t depth = 1,
++                              VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT) {
++  // Supported diagnostic formats occupy four or eight bytes per texel.
++  const bool compressed = format >= VK_FORMAT_BC1_RGB_UNORM_BLOCK && format <= VK_FORMAT_BC5_SNORM_BLOCK;
++  if (!compressed && format != VK_FORMAT_R32G32_SFLOAT && format != VK_FORMAT_R32_SFLOAT &&
++      format != VK_FORMAT_R16G16B16A16_SFLOAT &&
++      format != VK_FORMAT_R16G16B16A16_UNORM &&
++      format != VK_FORMAT_R8G8B8A8_UNORM && format != VK_FORMAT_B8G8R8A8_UNORM &&
++      format != VK_FORMAT_A2B10G10R10_UNORM_PACK32 &&
++      format != VK_FORMAT_A2R10G10B10_UNORM_PACK32) return false;
++  const auto& fn = gpu->functions();
++  const auto device = gpu->device();
++  struct Resources {
++    const rex::ui::vulkan::VulkanDevice* gpu;
++    VkBuffer buffer = VK_NULL_HANDLE;
++    VkDeviceMemory memory = VK_NULL_HANDLE;
++    VkCommandPool pool = VK_NULL_HANDLE;
++    VkFence fence = VK_NULL_HANDLE;
++    VkImage resolved = VK_NULL_HANDLE;
++    VkDeviceMemory resolved_memory = VK_NULL_HANDLE;
++    ~Resources() {
++      const auto& fn = gpu->functions();
++      const auto device = gpu->device();
++      if (fence) fn.vkDestroyFence(device, fence, nullptr);
++      if (pool) fn.vkDestroyCommandPool(device, pool, nullptr);
++      if (buffer) fn.vkDestroyBuffer(device, buffer, nullptr);
++      if (memory) fn.vkFreeMemory(device, memory, nullptr);
++      if (resolved) fn.vkDestroyImage(device, resolved, nullptr);
++      if (resolved_memory) fn.vkFreeMemory(device, resolved_memory, nullptr);
++    }
++  } resources{gpu};
++  const VkDeviceSize size = compressed
++      ? VkDeviceSize((width + 3) / 4) * ((height + 3) / 4) * depth *
++            ((format <= VK_FORMAT_BC1_RGBA_SRGB_BLOCK ||
++              format == VK_FORMAT_BC4_UNORM_BLOCK || format == VK_FORMAT_BC4_SNORM_BLOCK) ? 8 : 16)
++      : VkDeviceSize(width) * height * depth *
++      ((format == VK_FORMAT_R32G32_SFLOAT || format == VK_FORMAT_R16G16B16A16_SFLOAT ||
++        format == VK_FORMAT_R16G16B16A16_UNORM) ? 8 : 4);
++  if (!rex::ui::vulkan::util::CreateDedicatedAllocationBuffer(
++          gpu, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
++          rex::ui::vulkan::util::MemoryPurpose::kReadback,
++          resources.buffer, resources.memory)) return false;
++  if (samples != VK_SAMPLE_COUNT_1_BIT) {
++    if (depth != 1 || compressed) return false;
++    VkImageCreateInfo resolve{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
++    resolve.imageType = VK_IMAGE_TYPE_2D;
++    resolve.format = format;
++    resolve.extent = {width, height, 1};
++    resolve.mipLevels = resolve.arrayLayers = 1;
++    resolve.samples = VK_SAMPLE_COUNT_1_BIT;
++    resolve.tiling = VK_IMAGE_TILING_OPTIMAL;
++    resolve.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
++    if (!rex::ui::vulkan::util::CreateDedicatedAllocationImage(
++        gpu, resolve, rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal,
++        resources.resolved, resources.resolved_memory)) return false;
++  }
++  VkCommandPoolCreateInfo pool{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
++  pool.queueFamilyIndex = gpu->queue_family_graphics_compute();
++  if (fn.vkCreateCommandPool(device, &pool, nullptr, &resources.pool) != VK_SUCCESS) return false;
++  VkCommandBufferAllocateInfo alloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
++  alloc.commandPool = resources.pool;
++  alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
++  alloc.commandBufferCount = 1;
++  VkCommandBuffer command;
++  if (fn.vkAllocateCommandBuffers(device, &alloc, &command) != VK_SUCCESS) return false;
++  VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
++  if (fn.vkBeginCommandBuffer(command, &begin) != VK_SUCCESS) return false;
++  VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
++  barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
++  barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
++  barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
++  barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
++  barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++  barrier.image = image;
++  barrier.subresourceRange = rex::ui::vulkan::util::InitializeSubresourceRange();
++  fn.vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
++      VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
++  if (resources.resolved) {
++    VkImageMemoryBarrier target{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
++    target.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
++    target.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    target.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
++    target.srcQueueFamilyIndex = target.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    target.image = resources.resolved;
++    target.subresourceRange = barrier.subresourceRange;
++    fn.vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
++        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &target);
++    VkImageResolve region{};
++    region.srcSubresource.aspectMask = region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
++    region.srcSubresource.layerCount = region.dstSubresource.layerCount = 1;
++    region.extent = {width, height, 1};
++    fn.vkCmdResolveImage(command, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++        resources.resolved, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
++    target.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
++    target.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
++    target.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
++    target.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
++    fn.vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT,
++        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &target);
++  }
++  VkBufferImageCopy copy{};
++  copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
++  copy.imageSubresource.layerCount = 1;
++  copy.imageExtent = {width, height, depth};
++  fn.vkCmdCopyImageToBuffer(command, resources.resolved ? resources.resolved : image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++                           resources.buffer, 1, &copy);
++  std::swap(barrier.oldLayout, barrier.newLayout);
++  std::swap(barrier.srcAccessMask, barrier.dstAccessMask);
++  VkBufferMemoryBarrier host{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
++  host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
++  host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
++  host.srcQueueFamilyIndex = host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++  host.buffer = resources.buffer;
++  host.size = VK_WHOLE_SIZE;
++  fn.vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT,
++      VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT,
++      0, 0, nullptr, 1, &host, 1, &barrier);
++  if (fn.vkEndCommandBuffer(command) != VK_SUCCESS) return false;
++  VkFenceCreateInfo fence{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
++  if (fn.vkCreateFence(device, &fence, nullptr, &resources.fence) != VK_SUCCESS) return false;
++  VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
++  submit.commandBufferCount = 1;
++  submit.pCommandBuffers = &command;
++  {
++    const auto queue = gpu->AcquireQueue(gpu->queue_family_graphics_compute(), 0);
++    if (fn.vkQueueSubmit(queue.queue(), 1, &submit, resources.fence) != VK_SUCCESS) return false;
++  }
++  if (fn.vkWaitForFences(device, 1, &resources.fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS)
++    return false;
++  void* bytes = nullptr;
++  if (fn.vkMapMemory(device, resources.memory, 0, VK_WHOLE_SIZE, 0, &bytes) != VK_SUCCESS)
++    return false;
++  VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
++  range.memory = resources.memory;
++  range.size = VK_WHOLE_SIZE;
++  bool ok = fn.vkInvalidateMappedMemoryRanges(device, 1, &range) == VK_SUCCESS;
++  if (ok) {
++    FILE* file = std::fopen(path.c_str(), "wb");
++    ok = file && std::fwrite(bytes, 1, size_t(size), file) == size_t(size);
++    if (file) ok = std::fclose(file) == 0 && ok;
++  }
++  fn.vkUnmapMemory(device, resources.memory);
++  if (ok) {
++    FILE* info = std::fopen((path + ".txt").c_str(), "w");
++    if (info) {
++      std::fprintf(info, "width=%u\nheight=%u\ndepth=%u\nsamples=%u\nformat=%u\nswizzle=%u\n",
++                   width, height, depth, uint32_t(samples), uint32_t(format), swizzle);
++      std::fclose(info);
++    }
++  }
++  return ok;
++}
